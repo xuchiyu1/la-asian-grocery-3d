@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <!-- CHANGE: new page title (sample: "Using callout lines with labels") -->
+    <title>Where to Find Asian Groceries in LA | 3D Map</title>
+
+    <!-- Load the ArcGIS Maps SDK for JavaScript from CDN (unchanged from the sample) -->
+    <script type="module" src="https://js.arcgis.com/5.1/"></script>
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f4f2;
+        color: #222;
+      }
+      header {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 18px 16px 10px;
+      }
+      header h1 {
+        margin: 0 0 6px;
+        font-size: 1.6rem;
+      }
+      header p {
+        margin: 6px 0;
+        line-height: 1.45;
+        font-size: 0.95rem;
+      }
+      header a {
+        color: #b3261e;
+      }
+      /* CHANGE: the map gets a fixed height so the title and About text have room */
+      arcgis-scene {
+        display: block;
+        height: 75vh;
+        width: 100%;
+      }
+      #status {
+        font-size: 0.85rem;
+      }
+      footer {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 8px 16px 20px;
+        font-size: 0.8rem;
+        color: #555;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- CHANGE (Step 5): title and "About this map" paragraph above the map -->
+    <header>
+      <h1>Where to Find Asian Groceries in Los Angeles</h1>
+      <p>
+        <strong>About this map.</strong> This 3D map shows the major Asian supermarket chains in Los Angeles County,
+        colored by cuisine: Chinese/Taiwanese, Korean, Japanese, Filipino, Southeast Asian, and South Asian. The stores
+        are not stored in this page. Every time the page opens, it asks the
+        <a href="https://services1.arcgis.com/RLQu0rK7h4kbsBq5/arcgis/rest/services/snap_retailer_location_data/FeatureServer/0"
+          target="_blank" rel="noopener">USDA SNAP Retailer Locations feature service</a>
+        for the stores that match a SQL filter, so new or closed stores show up automatically. LA Metro rail stations
+        (from <a href="https://geohub.lacity.org/" target="_blank" rel="noopener">LA GeoHub</a>) are added in gray so you
+        can see which stores you can reach by train. Click any pin for details. Compared with the starting Esri sample, I
+        replaced the Swiss mountain peaks with live LA data, changed the basemap, camera, symbols, labels, and popups,
+        and added a legend.
+      </p>
+      <p id="status">Loading stores from the USDA service…</p>
+    </header>
+
+    <!-- CHANGE: basemap and ground set directly instead of the sample's web scene item -->
+    <arcgis-scene basemap="dark-gray-vector" ground="world-elevation">
+      <!-- CHANGE: navigation tools moved to the right so the legend does not cover them -->
+      <arcgis-zoom slot="top-right"></arcgis-zoom>
+      <arcgis-navigation-toggle slot="top-right"></arcgis-navigation-toggle>
+      <arcgis-compass slot="top-right"></arcgis-compass>
+      <!-- CHANGE (Step 4): Home and Legend components added -->
+      <arcgis-home slot="top-right"></arcgis-home>
+      <arcgis-legend slot="bottom-left"></arcgis-legend>
+
+      <!-- Kept from the sample: switch between top-down and bird's-eye view -->
+      <calcite-segmented-control id="controlCameraTilt" slot="bottom-right">
+        <calcite-segmented-control-item>Top-down view</calcite-segmented-control-item>
+        <calcite-segmented-control-item checked>Bird's eye view</calcite-segmented-control-item>
+      </calcite-segmented-control>
+      <calcite-chip id="countChip" appearance="outline-fill" kind="neutral" slot="top-left">Asian supermarkets in LA County</calcite-chip>
+    </arcgis-scene>
+
+    <footer>
+      Data: USDA Food and Nutrition Administration, SNAP Retailer Locator (public domain); LA Metro rail stations via
+      LA GeoHub. Note: only SNAP-authorized stores appear, so a few chains (for example Mitsuwa) are missing.
+      Built with the ArcGIS Maps SDK for JavaScript 5.1.
+    </footer>
+
+    <script type="module">
+      const FeatureLayer = await $arcgis.import("@arcgis/core/layers/FeatureLayer.js");
+
+      const viewElement = document.querySelector("arcgis-scene");
+      const statusEl = document.getElementById("status");
+      const countChip = document.getElementById("countChip");
+
+      /*****************************************************************
+       * 1. Which stores to request from the live API (SQL where clause)
+       *****************************************************************/
+      // Store-name patterns for the major Asian supermarket chains in LA County.
+      const chainPatterns = [
+        "H MART%", "% H MART%", "%99 RANCH%", "%168 MARKET%", // Korean + Chinese/Taiwanese anchors
+        "%ZION MARKET%", "%HANNAM%", "%GALLERIA MARKET%", "%GREENLAND MARKET%", // Korean
+        "%MARUKAI%", "%TOKYO CENTRAL%", // Japanese
+        "%SEAFOOD CITY%", "%ISLAND PACIFIC%", // Filipino
+        "LAX C %", "%THUAN PHAT%", "%SILOM%", // Southeast Asian (Thai / Vietnamese)
+        "INDIA SWEETS%", // South Asian
+      ];
+      const storeFilter =
+        "State = 'CA' AND County = 'LOS ANGELES' AND Store_Type <> 'Restaurant Meals Program' AND (" +
+        chainPatterns.map((p) => `UPPER(Store_Name) LIKE '${p}'`).join(" OR ") +
+        ")";
+
+      /*****************************************************************
+       * 2. Symbols: a colored "pin" floating above the ground on a line
+       *****************************************************************/
+      // CHANGE: the sample used one small black circle; here each cuisine gets its own color,
+      // and the pin is lifted off the ground with a callout line so it reads well in 3D.
+      function pin(color) {
+        return {
+          type: "point-3d",
+          symbolLayers: [
+            {
+              type: "icon",
+              resource: { primitive: "circle" },
+              material: { color },
+              outline: { color: "white", size: 1 },
+              size: 11,
+            },
+          ],
+          verticalOffset: { screenLength: 40, maxWorldLength: 1500, minWorldLength: 40 },
+          callout: { type: "line", size: 1, color: [255, 255, 255, 0.8] },
+        };
+      }
+
+      // Arcade expression that turns a store name into a cuisine group.
+      // It is used by the renderer (colors + legend) and by the popup.
+      const cuisineArcade = `
+        var n = Upper($feature.Store_Name);
+        if (Find('99 RANCH', n) > -1 || Find('168 MARKET', n) > -1) { return 'Chinese / Taiwanese'; }
+        if (Find('H MART', n) > -1 || Find('ZION', n) > -1 || Find('HANNAM', n) > -1 ||
+            Find('GALLERIA', n) > -1 || Find('GREENLAND', n) > -1) { return 'Korean'; }
+        if (Find('MARUKAI', n) > -1 || Find('TOKYO CENTRAL', n) > -1) { return 'Japanese'; }
+        if (Find('SEAFOOD CITY', n) > -1 || Find('ISLAND PACIFIC', n) > -1) { return 'Filipino'; }
+        if (Find('LAX C', n) > -1 || Find('THUAN PHAT', n) > -1 || Find('SILOM', n) > -1) { return 'Southeast Asian'; }
+        if (Find('INDIA SWEETS', n) > -1) { return 'South Asian'; }
+        return 'Other Asian';
+      `;
+
+      const cuisineColors = {
+        "Chinese / Taiwanese": "#e4572e",
+        Korean: "#4ea5d9",
+        Japanese: "#f2c14e",
+        Filipino: "#7bc96f",
+        "Southeast Asian": "#c77dff",
+        "South Asian": "#ff8fab",
+      };
+
+      /*****************************************************************
+       * 3. The live layer: USDA SNAP retailers (ArcGIS feature service)
+       *****************************************************************/
+      // CHANGE (Step 3): the sample's AlpineSummits URL is replaced with a live USDA service.
+      const groceries = new FeatureLayer({
+        url: "https://services1.arcgis.com/RLQu0rK7h4kbsBq5/arcgis/rest/services/snap_retailer_location_data/FeatureServer/0",
+        title: "Asian supermarkets (USDA SNAP retailers)",
+        definitionExpression: storeFilter,
+        outFields: ["Store_Name", "Store_Street_Address", "City", "Zip_Code", "Store_Type"],
+        elevationInfo: { mode: "relative-to-ground" },
+        returnZ: false,
+        renderer: {
+          type: "unique-value",
+          valueExpression: cuisineArcade,
+          valueExpressionTitle: "Cuisine",
+          uniqueValueInfos: Object.entries(cuisineColors).map(([value, color]) => ({
+            value,
+            label: value,
+            symbol: pin(color),
+          })),
+          defaultSymbol: pin("#bbbbbb"),
+          defaultLabel: "Other Asian",
+        },
+        // CHANGE: popup shows real attributes from the service (Step 3 requires at least two fields)
+        popupTemplate: {
+          title: "{Store_Name}",
+          expressionInfos: [{ name: "cuisine", title: "Cuisine", expression: cuisineArcade }],
+          content: [
+            {
+              type: "fields",
+              fieldInfos: [
+                { fieldName: "expression/cuisine", label: "Cuisine group" },
+                { fieldName: "Store_Street_Address", label: "Address" },
+                { fieldName: "City", label: "City" },
+                { fieldName: "Zip_Code", label: "ZIP code" },
+                { fieldName: "Store_Type", label: "USDA store type" },
+              ],
+            },
+          ],
+        },
+        // Labels with callouts (idea kept from the sample), only when zoomed in to avoid clutter
+        labelingInfo: [
+          {
+            labelPlacement: "above-center",
+            labelExpressionInfo: { expression: "Proper($feature.Store_Name)" },
+            minScale: 120000,
+            symbol: {
+              type: "label-3d",
+              symbolLayers: [
+                {
+                  type: "text",
+                  material: { color: "white" },
+                  halo: { color: [0, 0, 0, 0.7], size: 1.2 },
+                  size: 10,
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      /*****************************************************************
+       * 4. Context layer: LA Metro rail stations (LA GeoHub feature service)
+       *****************************************************************/
+      const stations = new FeatureLayer({
+        url: "https://services5.arcgis.com/7nsPwEMP38bSkCjy/arcgis/rest/services/RAIL_BRT/FeatureServer/0",
+        title: "LA Metro rail stations",
+        outFields: ["STATION", "LINE"],
+        elevationInfo: { mode: "on-the-ground" },
+        renderer: {
+          type: "simple",
+          symbol: {
+            type: "point-3d",
+            symbolLayers: [
+              {
+                type: "icon",
+                resource: { primitive: "square" },
+                material: { color: [210, 210, 210, 0.9] },
+                outline: { color: [60, 60, 60], size: 0.5 },
+                size: 5,
+              },
+            ],
+          },
+          label: "Metro rail station",
+        },
+        popupTemplate: {
+          title: "{STATION}",
+          content: "Metro line: {LINE}",
+        },
+      });
+
+      /*****************************************************************
+       * 5. Set up the scene: layers + camera over the LA basin
+       *****************************************************************/
+      await viewElement.viewOnReady();
+      viewElement.map.addMany([stations, groceries]);
+
+      // CHANGE: the camera opens over the LA basin, looking north toward the San Gabriel Valley.
+      const startCamera = {
+        position: { longitude: -118.24, latitude: 33.58, z: 40000, spatialReference: { wkid: 4326 } },
+        heading: 2,
+        tilt: 52,
+      };
+      viewElement.camera = startCamera;
+      document.querySelector("arcgis-home").viewpoint = { camera: startCamera };
+
+      // Confirm the live request worked and show how many stores came back.
+      groceries
+        .when(async () => {
+          const count = await groceries.queryFeatureCount();
+          statusEl.textContent = `${count} stores loaded live from the USDA SNAP retailer service just now.`;
+          countChip.textContent = `${count} Asian supermarkets in LA County`;
+        })
+        .catch((error) => {
+          console.error(error);
+          statusEl.textContent = "The USDA service did not respond. Please refresh the page in a minute.";
+        });
+
+      // Kept from the sample: switch between top-down and bird's-eye view
+      const controlCameraTilt = document.getElementById("controlCameraTilt");
+      controlCameraTilt.addEventListener("calciteSegmentedControlChange", () => {
+        viewElement.goTo(viewElement.camera.tilt < 1 ? { tilt: 52 } : { tilt: 0 }).catch((error) => {
+          if (error.name !== "AbortError") {
+            console.error(error);
+          }
+        });
+      });
+    </script>
+  </body>
+</html>
